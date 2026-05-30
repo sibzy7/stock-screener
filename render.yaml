@@ -4,9 +4,8 @@ services:
     runtime: python
     region: oregon          # US West — non-GCP IP range
     plan: free
-    rootDir: proxy-server
-    buildCommand: "pip install -r requirements.txt"
-    startCommand: "python main.py"
+    buildCommand: "pip install -r proxy-server/requirements.txt"
+    startCommand: "python proxy-server/main.py"
     envVars:
       - key: PORT
         generateValue: false   # Render injects $PORT automatically
