@@ -1,0 +1,8 @@
+yfinance==0.2.54
+pandas==2.2.2
+requests
+curl_cffi
+google-cloud-firestore
+google-cloud-pubsub
+google-cloud-secret-manager
+functions-framework
