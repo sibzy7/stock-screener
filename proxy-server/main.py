@@ -9,13 +9,16 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 import json
 
 import yfinance as yf
-import pandas as pd
+from curl_cffi.requests import Session
 
 PORT = int(os.environ.get("PORT", 8080))
 
+# Impersonate Chrome at TLS level to bypass Yahoo Finance rate limiting
+_SESSION = Session(impersonate="chrome")
+
 
 def fetch_ticker(ticker: str) -> dict:
-    tk = yf.Ticker(ticker)
+    tk = yf.Ticker(ticker, session=_SESSION)
     hist = tk.history(period="1y", auto_adjust=True)
 
     if hist.empty or len(hist) < 200:
