@@ -108,7 +108,7 @@ def screener(request):
         except Exception as e:
             logger.warning(f"Fetcher warm-up ping failed: {e}")
 
-    db = firestore.Client()
+    db = firestore.Client(database="stock-signals")
     publisher = pubsub_v1.PublisherClient()
     topic_path = publisher.topic_path(PROJECT_ID, PUBSUB_TOPIC)
     today = date.today().isoformat()
