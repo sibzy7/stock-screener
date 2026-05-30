@@ -1,1 +1,2 @@
-# no third-party deps — pure stdlib proxy
+yfinance==0.2.54
+pandas==2.2.2

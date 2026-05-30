@@ -1,87 +1,71 @@
 """
-Lightweight HTTP/HTTPS forward proxy for routing yfinance requests
-out of GCP IP ranges. Deployed on Render (non-GCP IPs).
+yfinance data-fetcher API — runs on Render (non-GCP IPs).
+GCP screener calls this to get price history + PE, avoiding
+Yahoo Finance's GCP IP block.
 """
-import select
-import socket
-import threading
-from http.server import BaseHTTPRequestHandler, HTTPServer
-import urllib.request
-import ssl
 import os
+from datetime import datetime
+from http.server import BaseHTTPRequestHandler, HTTPServer
+import json
+
+import yfinance as yf
+import pandas as pd
 
 PORT = int(os.environ.get("PORT", 8080))
 
 
-class ProxyHandler(BaseHTTPRequestHandler):
-    log_message = lambda self, *a: None  # silence per-request logs
+def fetch_ticker(ticker: str) -> dict:
+    tk = yf.Ticker(ticker)
+    hist = tk.history(period="1y", auto_adjust=True)
 
-    # ── Plain HTTP ────────────────────────────────────────────────────────────
-    def do_GET(self):  self._forward()
-    def do_POST(self): self._forward()
-    def do_HEAD(self): self._forward()
-    def do_PUT(self):  self._forward()
-    def do_DELETE(self): self._forward()
-    def do_OPTIONS(self): self._forward()
+    if hist.empty or len(hist) < 200:
+        return {"error": f"insufficient history: {len(hist)} rows"}
 
-    def _forward(self):
+    closes = hist["Close"].tolist()
+    info = tk.info or {}
+    pe_raw = info.get("trailingPE")
+
+    return {
+        "ticker": ticker,
+        "closes": closes,
+        "pe": float(pe_raw) if pe_raw is not None else None,
+    }
+
+
+class Handler(BaseHTTPRequestHandler):
+    def log_message(self, *args): pass  # silence access logs
+
+    def do_GET(self):
+        """Health check"""
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(json.dumps({"status": "ok"}).encode())
+
+    def do_POST(self):
+        length = int(self.headers.get("Content-Length", 0))
+        body = json.loads(self.rfile.read(length)) if length else {}
+        ticker = body.get("ticker", "").strip()
+
+        if not ticker:
+            self.send_response(400)
+            self.end_headers()
+            self.wfile.write(json.dumps({"error": "ticker required"}).encode())
+            return
+
         try:
-            req = urllib.request.Request(self.path)
-            for k, v in self.headers.items():
-                if k.lower() not in ("host", "proxy-connection"):
-                    req.add_header(k, v)
-            body = None
-            if self.command in ("POST", "PUT", "PATCH"):
-                length = int(self.headers.get("Content-Length", 0))
-                body = self.rfile.read(length) if length else None
-            if body:
-                req.data = body
-
-            ctx = ssl.create_default_context()
-            resp = urllib.request.urlopen(req, context=ctx, timeout=30)
-            self.send_response(resp.status)
-            for k, v in resp.headers.items():
-                if k.lower() not in ("transfer-encoding",):
-                    self.send_header(k, v)
-            self.end_headers()
-            self.wfile.write(resp.read())
-        except urllib.error.HTTPError as e:
-            self.send_response(e.code)
-            self.end_headers()
-            self.wfile.write(e.read())
+            result = fetch_ticker(ticker)
+            status = 200 if "error" not in result else 422
         except Exception as e:
-            self.send_error(502, str(e))
+            result = {"error": str(e)}
+            status = 500
 
-    # ── HTTPS CONNECT tunnel ──────────────────────────────────────────────────
-    def do_CONNECT(self):
-        host, port = self.path.split(":")
-        port = int(port)
-        try:
-            remote = socket.create_connection((host, port), timeout=10)
-            self.send_response(200, "Connection Established")
-            self.end_headers()
-            self._tunnel(self.connection, remote)
-        except Exception as e:
-            self.send_error(502, str(e))
-
-    def _tunnel(self, client, remote):
-        sockets = [client, remote]
-        while True:
-            readable, _, err = select.select(sockets, [], sockets, 10)
-            if err:
-                break
-            for s in readable:
-                other = remote if s is client else client
-                try:
-                    data = s.recv(4096)
-                    if not data:
-                        return
-                    other.sendall(data)
-                except Exception:
-                    return
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(json.dumps(result).encode())
 
 
 if __name__ == "__main__":
-    server = HTTPServer(("0.0.0.0", PORT), ProxyHandler)
-    print(f"Proxy listening on port {PORT}")
-    server.serve_forever()
+    print(f"yfinance fetcher listening on port {PORT}", flush=True)
+    HTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
